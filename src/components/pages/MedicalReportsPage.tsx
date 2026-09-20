@@ -16,20 +16,24 @@ import {
   Edit3,
   X,
   CheckCircle2,
-  Stethoscope
+  Stethoscope,
+  Share2,
+  UserCheck
 } from 'lucide-react';
-import { MedicalReport, PatientProfile, LabFinding } from '../../types';
+import { MedicalReport, PatientProfile, LabFinding, AuthUser } from '../../types';
 import { parseAndAnalyzeReport } from '../../services/reportParser';
-import { DEMO_REPORT_RAW_TEXT } from '../../data/mockHealthData';
+import { DEMO_REPORT_RAW_TEXT, MOCK_DOCTORS } from '../../data/mockHealthData';
 import { downloadReportPDF } from '../../services/pdfGenerator';
 import { MedicalDisclaimerBanner } from '../common/MedicalDisclaimerBanner';
 import { checkLaboratoryValue, findSuggestedDepartment } from '../../services/deterministicTools';
+import { cloudShareReportWithDoctor } from '../../services/supabase';
 
 interface MedicalReportsPageProps {
   reports: MedicalReport[];
   onAddReport: (newReport: MedicalReport) => void;
   onDeleteReport: (id: string) => void;
   patient: PatientProfile;
+  currentUser?: AuthUser | null;
   onNavigateToAi: (reportText: string) => void;
   onNavigateToBooking: (department: string) => void;
 }
@@ -47,6 +51,7 @@ export const MedicalReportsPage: React.FC<MedicalReportsPageProps> = ({
   onAddReport,
   onDeleteReport,
   patient,
+  currentUser,
   onNavigateToAi,
   onNavigateToBooking
 }) => {
@@ -77,8 +82,52 @@ export const MedicalReportsPage: React.FC<MedicalReportsPageProps> = ({
     { name: 'Free T4', value: '1.2', unit: 'ng/dL', min: '0.8', max: '1.8' }
   ]);
 
+  // Share Report with Doctor State
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [selectedDoctorIdToShare, setSelectedDoctorIdToShare] = useState<string>(MOCK_DOCTORS[0]?.id || 'doc-1');
+  const [isSharing, setIsSharing] = useState(false);
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
+  const [sharedReportsState, setSharedReportsState] = useState<Record<string, string[]>>(() => {
+    try {
+      const saved = localStorage.getItem('hc_shared_reports_map');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
   const selectedReport =
     reports.find((r) => r.id === selectedReportId) || reports[0];
+
+  const handleShareWithDoctor = async () => {
+    if (!selectedReport) return;
+    setIsSharing(true);
+    const doctorObj = MOCK_DOCTORS.find((d) => d.id === selectedDoctorIdToShare);
+    const docName = doctorObj?.name || 'Selected Doctor';
+    const patientId = currentUser?.id || `patient-${patient.fullName.replace(/\s+/g, '-').toLowerCase()}`;
+
+    try {
+      const res = await cloudShareReportWithDoctor(selectedReport.id, patientId, selectedDoctorIdToShare);
+      setSharedReportsState((prev) => {
+        const current = prev[selectedReport.id] || [];
+        const next = Array.from(new Set([...current, selectedDoctorIdToShare]));
+        const updated = { ...prev, [selectedReport.id]: next };
+        try {
+          localStorage.setItem('hc_shared_reports_map', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+      setShareNotice(res.message || `Successfully shared with ${docName}`);
+      setTimeout(() => {
+        setShowShareModal(false);
+        setShareNotice(null);
+      }, 1500);
+    } catch (err: any) {
+      setShareNotice(`Error: ${err?.message || 'Could not share report'}`);
+    } finally {
+      setIsSharing(false);
+    }
+  };
 
   // Filtering & Sorting
   const filteredReports = reports
@@ -498,6 +547,18 @@ export const MedicalReportsPage: React.FC<MedicalReportsPageProps> = ({
                         Sample Demo Report
                       </span>
                     )}
+                    {sharedReportsState[selectedReport.id]?.map((docId) => {
+                      const doc = MOCK_DOCTORS.find((d) => d.id === docId);
+                      return (
+                        <span
+                          key={docId}
+                          className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800"
+                        >
+                          <UserCheck className="w-3 h-3 text-emerald-600" />
+                          Shared with {doc?.name || 'Doctor'}
+                        </span>
+                      );
+                    })}
                   </div>
                   <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400 mt-1">
                     <span>{selectedReport.date}</span>
@@ -514,6 +575,16 @@ export const MedicalReportsPage: React.FC<MedicalReportsPageProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    id="share-report-btn"
+                    onClick={() => setShowShareModal(true)}
+                    className="px-3 py-2 rounded-xl text-xs font-bold bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 flex items-center gap-1.5 transition-colors shadow-2xs"
+                    title="Share this report with your attending physician"
+                  >
+                    <Share2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    <span>Share Report with Doctor</span>
+                  </button>
+
                   <button
                     id="download-report-pdf-btn"
                     onClick={() => downloadReportPDF(selectedReport, patient)}
@@ -917,6 +988,91 @@ export const MedicalReportsPage: React.FC<MedicalReportsPageProps> = ({
               >
                 <CheckCircle2 className="w-4 h-4" />
                 <span>Verify & Save Report</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share Report with Doctor Modal */}
+      {showShareModal && selectedReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-6 border border-slate-200 dark:border-slate-800 shadow-xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 flex items-center justify-center">
+                  <Share2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
+                    Share Report with Doctor
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Explicit physician access control
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowShareModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              Your report will <strong className="font-semibold text-slate-900 dark:text-white">only</strong> be visible to the physician you choose. No other doctor can see this report without your explicit permission.
+            </p>
+
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs">
+              <p className="font-bold text-slate-900 dark:text-white truncate">
+                Document: {selectedReport.title}
+              </p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                {selectedReport.findings.length} findings • {selectedReport.hospital}
+              </p>
+            </div>
+
+            <div className="space-y-2 text-xs">
+              <label className="block font-bold text-slate-700 dark:text-slate-300">
+                Select Attending Physician:
+              </label>
+              <select
+                value={selectedDoctorIdToShare}
+                onChange={(e) => setSelectedDoctorIdToShare(e.target.value)}
+                className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-medium"
+              >
+                {MOCK_DOCTORS.map((doc) => (
+                  <option key={doc.id} value={doc.id}>
+                    👨‍⚕️ {doc.name} — {doc.specialty} ({doc.hospital})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {shareNotice && (
+              <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs font-semibold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{shareNotice}</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowShareModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSharing}
+                onClick={handleShareWithDoctor}
+                className="px-5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white shadow-xs flex items-center gap-1.5 transition-colors"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span>{isSharing ? 'Sharing...' : 'Confirm & Share Report'}</span>
               </button>
             </div>
           </div>

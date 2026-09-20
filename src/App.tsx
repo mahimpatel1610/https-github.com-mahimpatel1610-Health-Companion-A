@@ -43,6 +43,10 @@ import {
   LifestyleInfo,
   AuthUser
 } from './types';
+import {
+  cloudSaveReport,
+  cloudCreateAppointment
+} from './services/supabase';
 import { downloadPatientSummaryPDF } from './services/pdfGenerator';
 import { getUserWorkspace, saveUserWorkspace } from './utils/userWorkspace';
 
@@ -171,6 +175,10 @@ export default function App() {
   // Report Handlers
   const handleAddReport = (newReport: MedicalReport) => {
     setReports((prev) => [newReport, ...prev]);
+    const patientId = currentUser?.id || `patient-${patient.fullName.replace(/\s+/g, '-').toLowerCase()}`;
+    cloudSaveReport(patientId, newReport).catch((err) => {
+      console.warn('Cloud report persistence notice:', err);
+    });
   };
 
   const handleDeleteReport = (id: string) => {
@@ -180,6 +188,10 @@ export default function App() {
   // Appointment Handlers
   const handleAddAppointment = (newApt: Appointment) => {
     setAppointments((prev) => [newApt, ...prev]);
+    const patientId = currentUser?.id || `patient-${patient.fullName.replace(/\s+/g, '-').toLowerCase()}`;
+    cloudCreateAppointment(newApt, patientId).catch((err) => {
+      console.warn('Cloud appointment persistence notice:', err);
+    });
   };
 
   const handleCancelAppointment = (id: string) => {
@@ -329,6 +341,7 @@ export default function App() {
               onAddReport={handleAddReport}
               onDeleteReport={handleDeleteReport}
               patient={patient}
+              currentUser={currentUser}
               onNavigateToAi={handleAskAiAboutReport}
               onNavigateToBooking={handleBookFromSpecialist}
             />

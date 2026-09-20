@@ -77,7 +77,16 @@ export const ContactPage: React.FC<ContactPageProps> = ({
     window.addEventListener('hc_messages_updated', refresh);
     // Background sync on mount
     syncDoctorMessagesFromServer().then((latest) => setMessages(latest));
-    return () => window.removeEventListener('hc_messages_updated', refresh);
+
+    // Continuous poll for real-time cross-device messaging
+    const timer = setInterval(() => {
+      syncDoctorMessagesFromServer().then((latest) => setMessages(latest));
+    }, 3000);
+
+    return () => {
+      window.removeEventListener('hc_messages_updated', refresh);
+      clearInterval(timer);
+    };
   }, []);
 
   const handleManualSync = async () => {
@@ -366,9 +375,25 @@ export const ContactPage: React.FC<ContactPageProps> = ({
 
           {/* Message Text */}
           <div>
-            <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-              Your Message or Question for the Doctor:
-            </label>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+              <label className="block font-bold text-slate-700 dark:text-slate-300">
+                Your Message or Question for the Doctor:
+              </label>
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-slate-400">Quick template:</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setMessageText(
+                      'Hello Doctor, I uploaded my medical report. Please review it.'
+                    )
+                  }
+                  className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-teal-50 dark:bg-teal-950/60 border border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900 transition-colors"
+                >
+                  "Hello Doctor, I uploaded my medical report. Please review it."
+                </button>
+              </div>
+            </div>
             <textarea
               rows={4}
               required

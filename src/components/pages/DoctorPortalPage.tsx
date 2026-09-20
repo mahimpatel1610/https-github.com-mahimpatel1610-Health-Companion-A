@@ -27,7 +27,10 @@ import {
   Copy,
   RefreshCw,
   Wifi,
-  Laptop
+  Laptop,
+  Lock,
+  Share2,
+  Sparkles
 } from 'lucide-react';
 import {
   AuthUser,
@@ -43,6 +46,7 @@ import {
   syncDoctorMessagesFromServer
 } from '../../services/doctorMessaging';
 import { DEMO_LOGIN_ACCOUNTS } from '../../data/demoAccounts';
+import { cloudGetSharedReportsForDoctor } from '../../services/supabase';
 
 interface DoctorPortalPageProps {
   currentUser: AuthUser;
@@ -65,7 +69,7 @@ export const DoctorPortalPage: React.FC<DoctorPortalPageProps> = ({
   onUpdateAppointmentStatus
 }) => {
   // Navigation tabs within Doctor Portal
-  const [activeTab, setActiveTab] = useState<'messages' | 'consultations' | 'profile'>('messages');
+  const [activeTab, setActiveTab] = useState<'messages' | 'consultations' | 'sharedReports' | 'profile'>('messages');
 
   // Messages state
   const [messages, setMessages] = useState<DoctorMessage[]>(() => getStoredDoctorMessages());
@@ -76,16 +80,60 @@ export const DoctorPortalPage: React.FC<DoctorPortalPageProps> = ({
   const [replyNotice, setReplyNotice] = useState<string | null>(null);
   const [isSyncingMessages, setIsSyncingMessages] = useState(false);
 
-  // Sync messages in real-time
+  // Shared Reports State (Requirement 12: explicit consent access)
+  const [sharedReportsList, setSharedReportsList] = useState<MedicalReport[]>([]);
+  const [selectedSharedReportId, setSelectedSharedReportId] = useState<string | null>(null);
+
+  // Sync messages in real-time (continuous 3-second poll for cross-laptop messaging)
   useEffect(() => {
     const refreshMessages = () => {
       setMessages(getStoredDoctorMessages());
     };
     window.addEventListener('hc_messages_updated', refreshMessages);
-    // Immediate background server sync
     syncDoctorMessagesFromServer().then((latest) => setMessages(latest));
-    return () => window.removeEventListener('hc_messages_updated', refreshMessages);
+
+    const timer = setInterval(() => {
+      syncDoctorMessagesFromServer().then((latest) => setMessages(latest));
+    }, 3000);
+
+    return () => {
+      window.removeEventListener('hc_messages_updated', refreshMessages);
+      clearInterval(timer);
+    };
   }, []);
+
+  // Sync explicitly shared medical reports
+  useEffect(() => {
+    const loadSharedReports = async () => {
+      try {
+        const localMapStr = localStorage.getItem('hc_shared_reports_map');
+        const localMap: Record<string, string[]> = localMapStr ? JSON.parse(localMapStr) : {};
+        const myDocId = currentUser.id.includes('rajesh') ? 'doc-2' : 'doc-1';
+
+        const serverShared = await cloudGetSharedReportsForDoctor(myDocId);
+        const serverReportIds = serverShared.map((s) => s.report_id);
+
+        const allowed = reports.filter((r) => {
+          const isLocallyShared =
+            (localMap[r.id] || []).includes(myDocId) ||
+            (localMap[r.id] || []).includes(currentUser.id);
+          const isServerShared = serverReportIds.includes(r.id);
+          return isLocallyShared || isServerShared;
+        });
+
+        setSharedReportsList(allowed);
+        if (allowed.length > 0 && !selectedSharedReportId) {
+          setSelectedSharedReportId(allowed[0].id);
+        }
+      } catch (err) {
+        console.warn('Error fetching shared reports:', err);
+      }
+    };
+
+    loadSharedReports();
+    const interval = setInterval(loadSharedReports, 3000);
+    return () => clearInterval(interval);
+  }, [currentUser, reports]);
 
   const handleManualSync = async () => {
     setIsSyncingMessages(true);
@@ -333,6 +381,22 @@ export const DoctorPortalPage: React.FC<DoctorPortalPageProps> = ({
         >
           <Calendar className="w-4 h-4" />
           <span>Consultation Queue ({appointments.length})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('sharedReports')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors flex items-center gap-2 ${
+            activeTab === 'sharedReports'
+              ? 'bg-emerald-600 text-white shadow-xs'
+              : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50'
+          }`}
+        >
+          <FileText className="w-4 h-4" />
+          <span>Shared Patient Reports</span>
+          <span className="px-1.5 py-0.2 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-extrabold text-[10px] border border-emerald-300">
+            {sharedReportsList.length}
+          </span>
         </button>
 
         <button
@@ -974,6 +1038,211 @@ export const DoctorPortalPage: React.FC<DoctorPortalPageProps> = ({
                 );
               })}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: Explicitly Shared Patient Reports (Requirement 12) */}
+      {activeTab === 'sharedReports' && (
+        <div className="space-y-4">
+          <div className="p-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-base font-extrabold text-slate-900 dark:text-white">
+                    Explicitly Shared Medical Reports
+                  </h2>
+                  <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                    Consent-Based EHR Access
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  Confidential patient laboratory data. You only have access to reports that patient <strong>{patient.fullName}</strong> explicitly authorized for you.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                  Attending Doctor: <strong>{currentUser.name}</strong>
+                </span>
+              </div>
+            </div>
+
+            {sharedReportsList.length === 0 ? (
+              <div className="py-12 px-4 text-center rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-amber-100 dark:bg-amber-950 text-amber-600 dark:text-amber-400 mx-auto flex items-center justify-center">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <div className="max-w-md mx-auto space-y-1">
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    No Reports Explicitly Shared Yet
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Under patient privacy rules, medical reports do not automatically become visible to all doctors. When patient {patient.fullName} clicks <strong>"Share Report with Doctor"</strong> and selects your name, the report will appear here instantly.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {/* Reports List Column */}
+                <div className="lg:col-span-4 space-y-2.5">
+                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    Authorized Documents ({sharedReportsList.length})
+                  </div>
+                  {sharedReportsList.map((r) => {
+                    const isSelected = (selectedSharedReportId || sharedReportsList[0].id) === r.id;
+                    return (
+                      <div
+                        key={r.id}
+                        onClick={() => setSelectedSharedReportId(r.id)}
+                        className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+                          isSelected
+                            ? 'border-emerald-500 bg-emerald-50/60 dark:bg-emerald-950/30 shadow-xs'
+                            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/60 hover:border-emerald-300'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                            {r.title}
+                          </h4>
+                          <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950 px-1.5 py-0.5 rounded">
+                            Shared
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-2">
+                          <span>{r.date}</span>
+                          <span>•</span>
+                          <span className="truncate">{r.hospital}</span>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between text-[11px]">
+                          <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                            {r.category}
+                          </span>
+                          <span className="text-slate-400 font-medium">
+                            {r.findings.length} findings
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Report Detail View Column */}
+                <div className="lg:col-span-8">
+                  {(() => {
+                    const activeRep =
+                      sharedReportsList.find((r) => r.id === (selectedSharedReportId || sharedReportsList[0].id)) ||
+                      sharedReportsList[0];
+                    if (!activeRep) return null;
+
+                    return (
+                      <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200 dark:border-slate-700">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
+                                {activeRep.title}
+                              </h3>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                Verified Patient Upload
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              {activeRep.hospital} • Date: {activeRep.date} • Category: {activeRep.category}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTab('messages');
+                              setReplyText(`Hello ${patient.fullName}, I reviewed your shared report "${activeRep.title}". Here are my clinical observations: `);
+                            }}
+                            className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white shadow-2xs flex items-center gap-1.5 transition-colors self-start sm:self-auto"
+                          >
+                            <Send className="w-3.5 h-3.5" />
+                            <span>Message Patient About Report</span>
+                          </button>
+                        </div>
+
+                        {/* Plain Language Summary */}
+                        <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1">
+                          <div className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-teal-600" />
+                            <span>Clinical Context & Plain-Language Summary</span>
+                          </div>
+                          <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                            {activeRep.summary}
+                          </p>
+                        </div>
+
+                        {/* Lab Findings Table */}
+                        <div className="space-y-2">
+                          <div className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                            Laboratory Parameter Breakdown ({activeRep.findings.length} markers):
+                          </div>
+                          <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-white dark:bg-slate-900">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead>
+                                <tr className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700">
+                                  <th className="p-2.5 font-bold">Biomarker</th>
+                                  <th className="p-2.5 font-bold">Patient Value</th>
+                                  <th className="p-2.5 font-bold">Standard Range</th>
+                                  <th className="p-2.5 font-bold">Status</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                {activeRep.findings.map((f, idx) => (
+                                  <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                    <td className="p-2.5 font-medium text-slate-900 dark:text-slate-100">
+                                      {f.parameter}
+                                    </td>
+                                    <td className="p-2.5 font-mono font-bold text-slate-900 dark:text-white">
+                                      {f.value} {f.unit}
+                                    </td>
+                                    <td className="p-2.5 font-mono text-slate-500">
+                                      {f.referenceRange || 'Reference standard'}
+                                    </td>
+                                    <td className="p-2.5">
+                                      <span
+                                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                          f.status === 'High'
+                                            ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                                            : f.status === 'Low'
+                                            ? 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                                            : f.status === 'Critical'
+                                            ? 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
+                                            : 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300'
+                                        }`}
+                                      >
+                                        {f.status}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Suggested Followup Department */}
+                        {activeRep.suggestedDepartment && (
+                          <div className="p-3 rounded-xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 text-xs flex items-center justify-between">
+                            <div>
+                              <span className="text-teal-900 dark:text-teal-200 font-bold">
+                                Specialty Review Recommendation:
+                              </span>
+                              <p className="text-slate-600 dark:text-slate-300 mt-0.5">
+                                Department of {activeRep.suggestedDepartment.department} • {activeRep.suggestedDepartment.reason}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

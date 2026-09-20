@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { AuthUser, UserRole } from '../../types';
 import { DEMO_LOGIN_ACCOUNTS, DemoAccount } from '../../data/demoAccounts';
+import { cloudSignIn, cloudSignUp } from '../../services/supabase';
 
 interface LoginPageProps {
   onLoginSuccess: (user: AuthUser) => void;
@@ -223,8 +224,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
     }, 600);
   };
 
-  // Form Submit Handler
-  const handleSubmit = (e: React.FormEvent) => {
+  // Form Submit Handler with Online Cloud Authentication & Cross-Device Persistence
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setStatusMessage(null);
 
@@ -255,8 +256,20 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
       }
 
       setIsLoading(true);
-      setTimeout(() => {
-        setIsLoading(false);
+      try {
+        const { user: cloudUser, error } = await cloudSignUp({
+          email: email.trim().toLowerCase(),
+          password,
+          fullName: name.trim(),
+          role: 'patient'
+        });
+
+        if (error && !cloudUser) {
+          setStatusMessage({ type: 'error', text: error });
+          setIsLoading(false);
+          return;
+        }
+
         const newPatient: StoredAccount = {
           role: 'patient',
           name: name.trim(),
@@ -278,8 +291,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
           localStorage.setItem('hc_save_login_preference', 'true');
         }
 
-        const authUser: AuthUser = {
-          id: `patient-${Date.now()}`,
+        const authUser: AuthUser = cloudUser || {
+          id: `patient-${email.trim().toLowerCase()}`,
           name: name.trim(),
           email: email.trim().toLowerCase(),
           role: 'patient',
@@ -287,7 +300,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
         };
 
         onLoginSuccess(authUser);
-      }, 500);
+      } catch (err: any) {
+        setStatusMessage({ type: 'error', text: err?.message || 'Registration failed. Please try again.' });
+      } finally {
+        setIsLoading(false);
+      }
       return;
     }
 
@@ -310,25 +327,31 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
       }
 
       setIsLoading(true);
-      setTimeout(() => {
-        setIsLoading(false);
-        const registry = getStoredRegistry();
-        const found = registry.find(
-          (u) =>
-            u.role === 'patient' &&
-            u.email.toLowerCase() === email.trim().toLowerCase()
-        );
+      try {
+        const { user: cloudUser, error } = await cloudSignIn(email.trim().toLowerCase(), password);
 
-        // Also check demo accounts if matches
-        const demoFound = DEMO_LOGIN_ACCOUNTS.find(
-          (d) =>
-            d.role === 'patient' &&
-            d.email.toLowerCase() === email.trim().toLowerCase()
-        );
+        if (error && !cloudUser) {
+          // Check local registry or demo accounts as fallback
+          const registry = getStoredRegistry();
+          const found = registry.find(
+            (u) =>
+              u.role === 'patient' &&
+              u.email.toLowerCase() === email.trim().toLowerCase()
+          );
 
-        if (found && found.password !== password) {
-          setStatusMessage({ type: 'error', text: 'Incorrect password. Please verify and try again.' });
-          return;
+          const demoFound = DEMO_LOGIN_ACCOUNTS.find(
+            (d) =>
+              d.role === 'patient' &&
+              d.email.toLowerCase() === email.trim().toLowerCase()
+          );
+
+          if ((found && found.password === password) || (demoFound && demoFound.password === password)) {
+            // Local fallback match verified
+          } else {
+            setStatusMessage({ type: 'error', text: error || 'Incorrect email or password. Please verify and try again.' });
+            setIsLoading(false);
+            return;
+          }
         }
 
         // Save or clear login information based on user option
@@ -347,8 +370,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
           localStorage.setItem('hc_save_login_preference', 'false');
         }
 
-        const authUser: AuthUser = {
-          id: found ? `patient-${found.email}` : `patient-${Date.now()}`,
+        const authUser: AuthUser = cloudUser || {
+          id: `patient-${email.trim().toLowerCase()}`,
           name: name.trim(),
           email: email.trim().toLowerCase(),
           role: 'patient',
@@ -356,7 +379,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
         };
 
         onLoginSuccess(authUser);
-      }, 500);
+      } catch (err: any) {
+        setStatusMessage({ type: 'error', text: err?.message || 'Login failed. Please verify credentials.' });
+      } finally {
+        setIsLoading(false);
+      }
       return;
     }
 
@@ -391,11 +418,26 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
       }
 
       setIsLoading(true);
-      setTimeout(() => {
-        setIsLoading(false);
+      try {
+        const formattedName = name.trim().startsWith('Dr.') ? name.trim() : `Dr. ${name.trim()}`;
+        const { user: cloudUser, error } = await cloudSignUp({
+          email: email.trim().toLowerCase(),
+          password,
+          fullName: formattedName,
+          role: 'doctor',
+          specialty: 'General Medicine & Clinical Diagnostics',
+          hospital: 'Apollo Health City'
+        });
+
+        if (error && !cloudUser) {
+          setStatusMessage({ type: 'error', text: error });
+          setIsLoading(false);
+          return;
+        }
+
         const newDoctor: StoredAccount = {
           role: 'doctor',
-          name: name.trim().startsWith('Dr.') ? name.trim() : `Dr. ${name.trim()}`,
+          name: formattedName,
           email: email.trim().toLowerCase(),
           password: password,
           doctorId: doctorId.trim(),
@@ -417,8 +459,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
           localStorage.setItem('hc_save_login_preference', 'true');
         }
 
-        const authUser: AuthUser = {
-          id: `doc-${Date.now()}`,
+        const authUser: AuthUser = cloudUser || {
+          id: `doc-${email.trim().toLowerCase()}`,
           name: newDoctor.name,
           email: newDoctor.email,
           role: 'doctor',
@@ -430,7 +472,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
         };
 
         onLoginSuccess(authUser);
-      }, 500);
+      } catch (err: any) {
+        setStatusMessage({ type: 'error', text: err?.message || 'Doctor registration failed.' });
+      } finally {
+        setIsLoading(false);
+      }
       return;
     }
 
@@ -449,34 +495,49 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
       }
 
       setIsLoading(true);
-      setTimeout(() => {
-        setIsLoading(false);
-        const query = doctorIdOrEmail.trim().toLowerCase();
+      try {
+        const query = doctorIdOrEmail.trim();
+        const { user: cloudUser, error } = await cloudSignIn(query, password);
+
+        if (error && !cloudUser) {
+          const queryLower = query.toLowerCase();
+          const registry = getStoredRegistry();
+          const found = registry.find(
+            (u) =>
+              u.role === 'doctor' &&
+              (u.email.toLowerCase() === queryLower || (u.doctorId && u.doctorId.toLowerCase() === queryLower))
+          );
+
+          // Check demo accounts as fallback
+          const demoFound = DEMO_LOGIN_ACCOUNTS.find(
+            (d) =>
+              d.role === 'doctor' &&
+              (d.email.toLowerCase() === queryLower || (d.doctorId && d.doctorId.toLowerCase() === queryLower))
+          );
+
+          if ((found && found.password === password) || (demoFound && demoFound.password === password)) {
+            // Local fallback match verified
+          } else {
+            setStatusMessage({ type: 'error', text: error || 'Incorrect Doctor credentials or password.' });
+            setIsLoading(false);
+            return;
+          }
+        }
+
+        const queryLower = query.toLowerCase();
         const registry = getStoredRegistry();
         const found = registry.find(
           (u) =>
             u.role === 'doctor' &&
-            (u.email.toLowerCase() === query || (u.doctorId && u.doctorId.toLowerCase() === query))
+            (u.email.toLowerCase() === queryLower || (u.doctorId && u.doctorId.toLowerCase() === queryLower))
         );
-
-        // Check demo accounts as fallback
         const demoFound = DEMO_LOGIN_ACCOUNTS.find(
           (d) =>
             d.role === 'doctor' &&
-            (d.email.toLowerCase() === query || (d.doctorId && d.doctorId.toLowerCase() === query))
+            (d.email.toLowerCase() === queryLower || (d.doctorId && d.doctorId.toLowerCase() === queryLower))
         );
 
-        if (found && found.password !== password) {
-          setStatusMessage({ type: 'error', text: 'Incorrect password for this physician account.' });
-          return;
-        }
-
-        if (!found && demoFound && demoFound.password !== password) {
-          setStatusMessage({ type: 'error', text: 'Incorrect password for this physician account.' });
-          return;
-        }
-
-        const resolvedName = found?.name || demoFound?.name || (query.includes('@') ? `Dr. ${query.split('@')[0]}` : `Dr. Physician (${query})`);
+        const resolvedName = cloudUser?.name || found?.name || demoFound?.name || (query.includes('@') ? `Dr. ${query.split('@')[0]}` : `Dr. Physician (${query})`);
 
         // Save or clear login information based on user option
         if (saveLoginInfo) {
@@ -494,10 +555,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
           localStorage.setItem('hc_save_login_preference', 'false');
         }
 
-        const authUser: AuthUser = {
-          id: found ? `doc-${found.email}` : demoFound ? `doc-${demoFound.email}` : `doc-${Date.now()}`,
+        const authUser: AuthUser = cloudUser || {
+          id: found ? `doc-${found.email}` : demoFound ? `doc-${demoFound.email}` : `doc-${queryLower}`,
           name: resolvedName,
-          email: found?.email || demoFound?.email || (query.includes('@') ? query : `${query}@hospital.org`),
+          email: found?.email || demoFound?.email || (query.includes('@') ? query : `${queryLower}@hospital.org`),
           role: 'doctor',
           doctorId: found?.doctorId || demoFound?.doctorId || query,
           licenseNumber: found?.doctorId || demoFound?.doctorId || 'KA-2010-44910',
@@ -507,7 +568,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
         };
 
         onLoginSuccess(authUser);
-      }, 500);
+      } catch (err: any) {
+        setStatusMessage({ type: 'error', text: err?.message || 'Doctor login failed.' });
+      } finally {
+        setIsLoading(false);
+      }
     }
   };
 

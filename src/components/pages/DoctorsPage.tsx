@@ -234,7 +234,7 @@ export const DoctorsPage: React.FC<DoctorsPageProps> = ({
                 title={`Send direct message to ${doc.name}`}
               >
                 <MessageSquare className="w-3.5 h-3.5 text-teal-600" />
-                <span>Message</span>
+                <span>Message Doctor</span>
               </button>
             </div>
           </div>
