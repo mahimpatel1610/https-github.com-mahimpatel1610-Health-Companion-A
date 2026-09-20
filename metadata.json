@@ -1,0 +1,6 @@
+{
+  "name": "Health Companion AI",
+  "description": "Understand your health. Connect with care. AI-powered patient health-record simplifier, report analyzer, and educational healthcare companion.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
