@@ -111,6 +111,26 @@ export interface ChatMessage {
   isVoiceInput?: boolean;
 }
 
+export interface DoctorMessage {
+  id: string;
+  senderName: string;
+  senderEmail: string;
+  senderPhone?: string;
+  doctorId: string;
+  doctorName: string;
+  hospital?: string;
+  subject: string;
+  message: string;
+  urgency: 'routine' | 'urgent' | 'question';
+  timestamp: string;
+  status: 'unread' | 'read' | 'replied';
+  reply?: {
+    text: string;
+    repliedAt: string;
+    doctorName: string;
+  };
+}
+
 export interface TimelineEvent {
   id: string;
   date: string;
@@ -124,11 +144,54 @@ export interface TimelineEvent {
   reportId?: string;
 }
 
+export interface MedicationAdministration {
+  typicalDosage: string;
+  administrationTiming: string;
+  maximumDailyLimit: string;
+  missedDoseAdvice: string;
+  durationGuideline: string;
+}
+
+export interface MedicationInteractionsDetail {
+  majorDrugInteractions: string[];
+  foodAndDietaryInteractions: string[];
+  contraindicatedConditions: string[];
+}
+
+export interface MedicationSideEffectsBreakdown {
+  mildFrequent: string[];
+  moderateRequiresMonitoring: string[];
+  severeEmergencySymptoms: string[];
+}
+
+export interface MedicationStorageAndDisposal {
+  temperature: string;
+  moistureGuidance: string;
+  childSafety: string;
+  disposalProcedure: string;
+}
+
+export interface MedicationSpecialPopulations {
+  pregnancyLactation: string;
+  renalImpairment: string;
+  hepaticConsideration: string;
+  pediatricGeriatricNotes: string;
+}
+
+export interface MedicationClinicalProfile {
+  therapeuticClass: string;
+  mechanismOfAction: string;
+  onsetOfAction: string;
+  durationOfAction: string;
+}
+
 export interface MedicationGuide {
   id: string;
   name: string;
   genericName: string;
   category: string;
+  categoryKey: string;
+  dosageForm?: string;
   otcStatus: 'Over-The-Counter' | 'Prescription Only';
   generalUses: string[];
   generalPrecautions: string[];
@@ -140,6 +203,12 @@ export interface MedicationGuide {
     interactionsWarning: string;
     pregnancyWarning: string;
   };
+  clinicalProfile?: MedicationClinicalProfile;
+  administration?: MedicationAdministration;
+  interactionsDetail?: MedicationInteractionsDetail;
+  sideEffectsBreakdown?: MedicationSideEffectsBreakdown;
+  storageAndDisposal?: MedicationStorageAndDisposal;
+  specialPopulations?: MedicationSpecialPopulations;
 }
 
 export interface AppSettings {

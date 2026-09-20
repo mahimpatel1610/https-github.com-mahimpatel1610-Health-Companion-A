@@ -147,10 +147,21 @@ export const AiAssistantPage: React.FC<AiAssistantPageProps> = ({
       }
     } catch (err) {
       console.warn('Chat request fallback:', err);
+      const flaggedStr = activeReport?.findings
+        ?.filter((f) => f.status === 'outside_range')
+        ?.map((f) => `${f.testName} (${f.measuredValue} ${f.unit})`)
+        ?.join(', ');
+
       const fallbackMsg: ChatMessage = {
         id: `msg-${Date.now()}-fallback`,
         role: 'assistant',
-        content: `Based on your medical records:\n\n• Your laboratory parameters have been checked deterministically against the explicitly stated reference values in your report.\n• For any values outside standard reference limits (such as Hemoglobin at 11.2 g/dL), we recommend scheduling a routine follow-up with a General Physician or Hematologist.\n\n*Health Companion AI provides educational information only. It does not diagnose conditions or replace professional medical advice.*`,
+        content: activeReport
+          ? `Based on your medical report "${activeReport.title}":\n\n• Your laboratory parameters were evaluated deterministically against the explicitly stated reference values in this document.\n${
+              flaggedStr
+                ? `• Finding(s) outside stated reference bounds: ${flaggedStr}. We recommend discussing these with your consulting doctor or specialist.`
+                : '• All evaluated numerical findings in this report fall within the stated normal bounds.'
+            }\n\n*Health Companion AI provides educational information only. It does not diagnose conditions or replace professional medical advice.*`
+          : `Health Companion AI provides educational health insights and helps you understand clinical terms and reference ranges.\n\n*Health Companion AI provides educational information only.*`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
       setMessages((prev) => [...prev, fallbackMsg]);

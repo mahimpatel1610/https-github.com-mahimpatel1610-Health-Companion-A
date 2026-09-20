@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Home,
   Activity,
@@ -24,9 +24,11 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
-  HeartPulse
+  HeartPulse,
+  MessageSquare
 } from 'lucide-react';
 import { PatientProfile, AuthUser } from '../../types';
+import { getStoredDoctorMessages } from '../../services/doctorMessaging';
 
 interface SidebarProps {
   currentSection: string;
@@ -97,10 +99,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const isDoctor = currentUser?.role === 'doctor';
 
+  const [messages, setMessages] = useState(() => getStoredDoctorMessages());
+
+  useEffect(() => {
+    const handleUpdate = () => setMessages(getStoredDoctorMessages());
+    window.addEventListener('hc_messages_updated', handleUpdate);
+    return () => window.removeEventListener('hc_messages_updated', handleUpdate);
+  }, []);
+
+  const unreadDoctorCount = messages.filter((m) => m.status === 'unread').length;
+  const repliedPatientCount = messages.filter(
+    (m) =>
+      m.status === 'replied' &&
+      currentUser?.email &&
+      m.senderEmail.toLowerCase() === currentUser.email.toLowerCase()
+  ).length;
+
   const visibleNavItems = NAV_ITEMS.filter((item) => {
     if (item.doctorOnly && !isDoctor) return false;
     if (item.patientOnly && isDoctor) return false;
     return true;
+  }).map((item) => {
+    if (item.id === 'doctor-portal' && unreadDoctorCount > 0) {
+      return { ...item, badge: `${unreadDoctorCount} New` };
+    }
+    if (item.id === 'contact') {
+      if (repliedPatientCount > 0) {
+        return { ...item, badge: `${repliedPatientCount} Replied` };
+      }
+      return { ...item, badge: 'Direct' };
+    }
+    return item;
   });
 
   // Reusable Nav Content List

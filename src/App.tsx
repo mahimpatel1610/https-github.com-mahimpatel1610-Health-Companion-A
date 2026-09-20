@@ -44,6 +44,7 @@ import {
   AuthUser
 } from './types';
 import { downloadPatientSummaryPDF } from './services/pdfGenerator';
+import { getUserWorkspace, saveUserWorkspace } from './utils/userWorkspace';
 
 export default function App() {
   // Theme State (Light / Dark)
@@ -77,55 +78,58 @@ export default function App() {
     });
   };
 
-  // App Data State
-  const [patient, setPatient] = useState<PatientProfile>(() => {
-    const saved = localStorage.getItem('hc_patient');
-    return saved ? JSON.parse(saved) : MOCK_PATIENT;
-  });
-
-  const [reports, setReports] = useState<MedicalReport[]>(() => {
-    const saved = localStorage.getItem('hc_reports');
-    return saved ? JSON.parse(saved) : MOCK_REPORTS;
-  });
-
-  const [appointments, setAppointments] = useState<Appointment[]>(() => {
-    const saved = localStorage.getItem('hc_appointments');
-    return saved ? JSON.parse(saved) : MOCK_APPOINTMENTS;
-  });
-
+  // App Data State - Initialized from the active user's workspace
+  const [patient, setPatient] = useState<PatientProfile>(() => getUserWorkspace(currentUser).patient);
+  const [reports, setReports] = useState<MedicalReport[]>(() => getUserWorkspace(currentUser).reports);
+  const [appointments, setAppointments] = useState<Appointment[]>(() => getUserWorkspace(currentUser).appointments);
   const [doctors] = useState<Doctor[]>(MOCK_DOCTORS);
-  const [medicalHistory, setMedicalHistory] = useState<MedicalHistory>(MOCK_MEDICAL_HISTORY);
-  const [lifestyle, setLifestyle] = useState<LifestyleInfo>(MOCK_LIFESTYLE);
+  const [medicalHistory, setMedicalHistory] = useState<MedicalHistory>(() => getUserWorkspace(currentUser).medicalHistory);
+  const [lifestyle, setLifestyle] = useState<LifestyleInfo>(() => getUserWorkspace(currentUser).lifestyle);
   const [previousRecords] = useState(MOCK_PREVIOUS_RECORDS);
 
   // Shared state for navigation flow
   const [selectedDeptForBooking, setSelectedDeptForBooking] = useState<string | undefined>(undefined);
+  const [selectedDoctorForContact, setSelectedDoctorForContact] = useState<string | undefined>(undefined);
   const [aiPreloadedContext, setAiPreloadedContext] = useState<string | undefined>(undefined);
 
-  // Synchronize Root HTML class for Tailwind dark mode
+  // Synchronize Root HTML class and attributes for Tailwind dark mode
   useEffect(() => {
     localStorage.setItem('hc_ai_theme', theme);
     if (theme === 'dark') {
       document.documentElement.classList.add('dark');
+      document.body.classList.add('dark');
+      document.documentElement.setAttribute('data-theme', 'dark');
       document.documentElement.style.colorScheme = 'dark';
     } else {
       document.documentElement.classList.remove('dark');
+      document.body.classList.remove('dark');
+      document.documentElement.setAttribute('data-theme', 'light');
       document.documentElement.style.colorScheme = 'light';
     }
   }, [theme]);
 
-  // Persist State to LocalStorage
+  // When user logs in or switches, load their dedicated personal workspace
   useEffect(() => {
-    localStorage.setItem('hc_reports', JSON.stringify(reports));
-  }, [reports]);
+    const ws = getUserWorkspace(currentUser);
+    setPatient(ws.patient);
+    setReports(ws.reports);
+    setAppointments(ws.appointments);
+    setMedicalHistory(ws.medicalHistory);
+    setLifestyle(ws.lifestyle);
+  }, [currentUser?.email]);
 
+  // Persist State to LocalStorage for the current user's workspace
   useEffect(() => {
-    localStorage.setItem('hc_appointments', JSON.stringify(appointments));
-  }, [appointments]);
-
-  useEffect(() => {
-    localStorage.setItem('hc_patient', JSON.stringify(patient));
-  }, [patient]);
+    if (currentUser?.email) {
+      saveUserWorkspace(currentUser, {
+        patient,
+        reports,
+        appointments,
+        medicalHistory,
+        lifestyle
+      });
+    }
+  }, [patient, reports, appointments, medicalHistory, lifestyle, currentUser?.email]);
 
   useEffect(() => {
     if (currentUser) {
@@ -213,14 +217,30 @@ export default function App() {
   };
 
   const handleResetDemoData = () => {
-    setReports(MOCK_REPORTS);
-    setAppointments(MOCK_APPOINTMENTS);
-    setPatient(MOCK_PATIENT);
-    setMedicalHistory(MOCK_MEDICAL_HISTORY);
-    setLifestyle(MOCK_LIFESTYLE);
-    localStorage.removeItem('hc_reports');
-    localStorage.removeItem('hc_appointments');
-    localStorage.removeItem('hc_patient');
+    if (currentUser?.email === 'rahul.sharma@healthcompanion.ai') {
+      setReports(MOCK_REPORTS);
+      setAppointments(MOCK_APPOINTMENTS);
+      setPatient(MOCK_PATIENT);
+      setMedicalHistory(MOCK_MEDICAL_HISTORY);
+      setLifestyle(MOCK_LIFESTYLE);
+      saveUserWorkspace(currentUser, {
+        patient: MOCK_PATIENT,
+        reports: MOCK_REPORTS,
+        appointments: MOCK_APPOINTMENTS,
+        medicalHistory: MOCK_MEDICAL_HISTORY,
+        lifestyle: MOCK_LIFESTYLE
+      });
+    } else {
+      const cleanWs = getUserWorkspace(currentUser);
+      setReports([]);
+      setAppointments([]);
+      setPatient(cleanWs.patient);
+      saveUserWorkspace(currentUser, {
+        ...cleanWs,
+        reports: [],
+        appointments: []
+      });
+    }
   };
 
   return (
@@ -333,7 +353,10 @@ export default function App() {
                 setSelectedDeptForBooking(doc.specialty);
                 setCurrentSection('appointments');
               }}
-              onContactDoctor={() => setCurrentSection('contact')}
+              onContactDoctor={(doc) => {
+                setSelectedDoctorForContact(doc.id);
+                setCurrentSection('contact');
+              }}
             />
           )}
 
@@ -392,7 +415,16 @@ export default function App() {
           {currentSection === 'contact' && (
             <ContactPage
               doctors={doctors}
-              onStartConsultation={() => setCurrentSection('appointments')}
+              patient={patient}
+              currentUser={currentUser}
+              preselectedDoctorId={selectedDoctorForContact}
+              onStartConsultation={(doc) => {
+                if (doc?.specialty) {
+                  setSelectedDeptForBooking(doc.specialty);
+                }
+                setCurrentSection('appointments');
+              }}
+              onNavigate={handleNavigate}
             />
           )}
 
