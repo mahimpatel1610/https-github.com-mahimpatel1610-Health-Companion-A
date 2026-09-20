@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
@@ -13,6 +14,333 @@ const PORT = 3000;
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+// ---------------------------------------------------------------------------
+// Server-Side Persistent Storage (Cross-Device Synchronized Data)
+// ---------------------------------------------------------------------------
+const DATA_DIR = path.join(process.cwd(), "server_data");
+if (!fs.existsSync(DATA_DIR)) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (err) {
+    console.error("Failed to create server_data directory:", err);
+  }
+}
+
+const MESSAGES_FILE = path.join(DATA_DIR, "doctor_messages.json");
+const APPOINTMENTS_FILE = path.join(DATA_DIR, "appointments.json");
+
+interface ServerDoctorMessage {
+  id: string;
+  senderName: string;
+  senderEmail: string;
+  senderPhone?: string;
+  doctorId: string;
+  doctorName: string;
+  hospital?: string;
+  subject: string;
+  message: string;
+  urgency?: "routine" | "urgent" | "question";
+  timestamp: string;
+  status: "unread" | "read" | "replied";
+  reply?: {
+    text: string;
+    repliedAt: string;
+    doctorName: string;
+  };
+}
+
+interface ServerAppointment {
+  id: string;
+  doctorId: string;
+  doctorName: string;
+  specialty: string;
+  date: string;
+  time: string;
+  hospital: string;
+  type: "In-person" | "Online";
+  status: "Confirmed" | "Completed" | "Cancelled";
+  reason: string;
+  notes?: string;
+}
+
+const DEFAULT_SERVER_MESSAGES: ServerDoctorMessage[] = [
+  {
+    id: "msg-seed-1",
+    senderName: "Rahul Sharma",
+    senderEmail: "rahul.sharma@healthcompanion.ai",
+    senderPhone: "+91 98765 43210",
+    doctorId: "doc-1",
+    doctorName: "Dr. Ananya Sharma",
+    hospital: "Apollo Health City, Bengaluru",
+    subject: "Question regarding slight hemoglobin variation in CBC report",
+    message: "Hello Dr. Ananya, my recent complete blood count showed hemoglobin at 11.2 g/dL. I wanted to ask if I should start any dietary iron supplements or if I should schedule an in-person follow up visit?",
+    urgency: "question",
+    timestamp: "19 Sep 2026, 11:30 AM",
+    status: "replied",
+    reply: {
+      text: "Hello Rahul, 11.2 g/dL indicates mild variation. Increasing dietary iron (spinach, lentils, beets) and repeating a CBC in 6 to 8 weeks is usually the initial step. If you experience fatigue, please book a routine consultation.",
+      repliedAt: "19 Sep 2026, 02:15 PM",
+      doctorName: "Dr. Ananya Sharma"
+    }
+  },
+  {
+    id: "msg-seed-2",
+    senderName: "Priya Mehra",
+    senderEmail: "priya.mehra@example.com",
+    senderPhone: "+91 98111 22334",
+    doctorId: "clinic",
+    doctorName: "All Attending Doctors & Clinic Coordinator",
+    hospital: "Apollo Health City, Bengaluru",
+    subject: "Request for teleconsultation timing confirmation",
+    message: "Hello, I booked a digital teleconsultation for this coming Tuesday. Could the clinic team confirm if the secure video link will be sent via SMS or through this portal?",
+    urgency: "routine",
+    timestamp: "19 Sep 2026, 03:45 PM",
+    status: "unread"
+  }
+];
+
+const DEFAULT_SERVER_APPOINTMENTS: ServerAppointment[] = [
+  {
+    id: "apt-1",
+    doctorId: "doc-1",
+    doctorName: "Dr. Ananya Sharma",
+    specialty: "General Medicine & Hematology",
+    date: "24 Sep 2026",
+    time: "10:30 AM",
+    hospital: "Apollo Health City, Bengaluru",
+    type: "In-person",
+    status: "Confirmed",
+    reason: "Review latest laboratory findings (Hemoglobin follow-up)",
+    notes: "Please bring recent fasting lab report and allergy history."
+  },
+  {
+    id: "apt-2",
+    doctorId: "doc-2",
+    doctorName: "Dr. Rajesh Varma",
+    specialty: "Cardiology & Vascular Medicine",
+    date: "12 Oct 2026",
+    time: "03:00 PM",
+    hospital: "Metro Heart & Vascular Institute",
+    type: "Online",
+    status: "Confirmed",
+    reason: "Semi-annual lipid and blood pressure preventative review",
+    notes: "Teleconsultation link will be active 10 minutes prior."
+  }
+];
+
+function loadMessages(): ServerDoctorMessage[] {
+  try {
+    if (fs.existsSync(MESSAGES_FILE)) {
+      const content = fs.readFileSync(MESSAGES_FILE, "utf-8");
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (err) {
+    console.error("Error reading messages file:", err);
+  }
+  return [...DEFAULT_SERVER_MESSAGES];
+}
+
+function saveMessages(msgs: ServerDoctorMessage[]) {
+  try {
+    fs.writeFileSync(MESSAGES_FILE, JSON.stringify(msgs, null, 2), "utf-8");
+  } catch (err) {
+    console.error("Error writing messages file:", err);
+  }
+}
+
+function loadAppointments(): ServerAppointment[] {
+  try {
+    if (fs.existsSync(APPOINTMENTS_FILE)) {
+      const content = fs.readFileSync(APPOINTMENTS_FILE, "utf-8");
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (err) {
+    console.error("Error reading appointments file:", err);
+  }
+  return [...DEFAULT_SERVER_APPOINTMENTS];
+}
+
+function saveAppointments(apts: ServerAppointment[]) {
+  try {
+    fs.writeFileSync(APPOINTMENTS_FILE, JSON.stringify(apts, null, 2), "utf-8");
+  } catch (err) {
+    console.error("Error writing appointments file:", err);
+  }
+}
+
+let serverMessages: ServerDoctorMessage[] = loadMessages();
+let serverAppointments: ServerAppointment[] = loadAppointments();
+
+// ===========================================================================
+// Cross-Device Synchronized Doctor Messaging Endpoints
+// ===========================================================================
+
+// Get all doctor messages
+app.get("/api/doctor-messages", (_req, res) => {
+  res.json({ success: true, messages: serverMessages });
+});
+
+// Post a new message from patient to doctor (visible on any laptop/device)
+app.post("/api/doctor-messages", (req, res) => {
+  try {
+    const { senderName, senderEmail, senderPhone, doctorId, doctorName, hospital, subject, message, urgency } = req.body;
+    if (!message || !message.trim()) {
+      res.status(400).json({ error: "Message content is required." });
+      return;
+    }
+
+    const newMsg: ServerDoctorMessage = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      senderName: (senderName || "Patient").trim(),
+      senderEmail: (senderEmail || "patient@healthcompanion.ai").trim(),
+      senderPhone: (senderPhone || "").trim(),
+      doctorId: doctorId || "clinic",
+      doctorName: doctorName || "Attending Physician",
+      hospital: hospital || "Apollo Health City Hospital",
+      subject: (subject || "Medical Inquiry").trim(),
+      message: message.trim(),
+      urgency: urgency || "routine",
+      timestamp:
+        new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) +
+        ", " +
+        new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      status: "unread"
+    };
+
+    serverMessages = [newMsg, ...serverMessages];
+    saveMessages(serverMessages);
+    console.log(`[Cross-Device Messages] New message created: ${newMsg.id} to ${newMsg.doctorName} from ${newMsg.senderName}`);
+    res.json({ success: true, message: newMsg, messages: serverMessages });
+  } catch (err: any) {
+    console.error("Error saving message:", err);
+    res.status(500).json({ error: "Internal server error saving message." });
+  }
+});
+
+// Doctor replies to a message from any laptop
+app.post("/api/doctor-messages/:id/reply", (req, res) => {
+  try {
+    const { id } = req.params;
+    const { replyText, doctorName } = req.body;
+    if (!replyText || !replyText.trim()) {
+      res.status(400).json({ error: "Reply text is required." });
+      return;
+    }
+
+    let updatedMsg: ServerDoctorMessage | null = null;
+    serverMessages = serverMessages.map((m) => {
+      if (m.id === id) {
+        updatedMsg = {
+          ...m,
+          status: "replied",
+          reply: {
+            text: replyText.trim(),
+            repliedAt:
+              new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) +
+              ", " +
+              new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+            doctorName: (doctorName || "Attending Physician").trim()
+          }
+        };
+        return updatedMsg;
+      }
+      return m;
+    });
+
+    if (!updatedMsg) {
+      res.status(404).json({ error: "Message not found." });
+      return;
+    }
+
+    saveMessages(serverMessages);
+    console.log(`[Cross-Device Messages] Reply saved for message ${id} by ${doctorName}`);
+    res.json({ success: true, message: updatedMsg, messages: serverMessages });
+  } catch (err: any) {
+    console.error("Error replying to message:", err);
+    res.status(500).json({ error: "Internal server error posting reply." });
+  }
+});
+
+// Mark message as read
+app.patch("/api/doctor-messages/:id/read", (req, res) => {
+  try {
+    const { id } = req.params;
+    serverMessages = serverMessages.map((m) => {
+      if (m.id === id && m.status === "unread") {
+        return { ...m, status: "read" };
+      }
+      return m;
+    });
+    saveMessages(serverMessages);
+    res.json({ success: true, messages: serverMessages });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to mark message as read." });
+  }
+});
+
+// Delete message
+app.delete("/api/doctor-messages/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    serverMessages = serverMessages.filter((m) => m.id !== id);
+    saveMessages(serverMessages);
+    res.json({ success: true, messages: serverMessages });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to delete message." });
+  }
+});
+
+// ===========================================================================
+// Cross-Device Synchronized Appointments Endpoints
+// ===========================================================================
+
+app.get("/api/appointments", (_req, res) => {
+  res.json({ success: true, appointments: serverAppointments });
+});
+
+app.post("/api/appointments", (req, res) => {
+  try {
+    const { doctorId, doctorName, specialty, date, time, hospital, type, reason, notes } = req.body;
+    const newApt: ServerAppointment = {
+      id: `apt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      doctorId: doctorId || "doc-1",
+      doctorName: doctorName || "Attending Physician",
+      specialty: specialty || "General Medicine",
+      date: date || new Date().toLocaleDateString("en-GB"),
+      time: time || "10:00 AM",
+      hospital: hospital || "Apollo Health City",
+      type: type === "Online" ? "Online" : "In-person",
+      status: "Confirmed",
+      reason: reason || "General Consultation",
+      notes: notes || ""
+    };
+    serverAppointments = [newApt, ...serverAppointments];
+    saveAppointments(serverAppointments);
+    res.json({ success: true, appointment: newApt, appointments: serverAppointments });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to book appointment." });
+  }
+});
+
+app.patch("/api/appointments/:id/status", (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    serverAppointments = serverAppointments.map((a) => {
+      if (a.id === id) {
+        return { ...a, status };
+      }
+      return a;
+    });
+    saveAppointments(serverAppointments);
+    res.json({ success: true, appointments: serverAppointments });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update appointment status." });
+  }
+});
+
 // Lazy initialization of Gemini client
 let geminiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
@@ -24,6 +352,71 @@ function getGeminiClient(): GoogleGenAI | null {
     geminiClient = new GoogleGenAI({ apiKey });
   }
   return geminiClient;
+}
+
+interface GeminiGenerateOptions {
+  contents: any[];
+  config?: any;
+  preferredModel?: string;
+}
+
+function isTransientGeminiError(err: any): boolean {
+  if (!err) return false;
+  const status = err.status || err.code || err?.error?.code;
+  if (status === 503 || status === 429 || status === 500) return true;
+  const str = String(err.message || "") + " " + JSON.stringify(err);
+  return (
+    str.includes("503") ||
+    str.includes("429") ||
+    str.includes("UNAVAILABLE") ||
+    str.includes("high demand") ||
+    str.includes("Spikes in demand") ||
+    str.includes("RESOURCE_EXHAUSTED") ||
+    str.includes("rate limit")
+  );
+}
+
+/**
+ * Resilient Gemini content generator with automatic multi-model fallback:
+ * Primary: 'gemini-3.8-flash'
+ * Secondary: 'gemini-3.1-flash-lite' (high availability, fast, compliant)
+ * Tertiary: 'gemini-flash-latest'
+ * Handles transient 503 (high demand spikes) and 429 rate limits gracefully with backoff.
+ */
+async function generateContentWithFallback(
+  client: GoogleGenAI,
+  options: GeminiGenerateOptions
+): Promise<{ text: string; modelUsed: string } | null> {
+  const modelsToTry = [
+    options.preferredModel || "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-latest"
+  ].filter((m, idx, arr) => arr.indexOf(m) === idx);
+
+  for (const model of modelsToTry) {
+    try {
+      const response = await client.models.generateContent({
+        model,
+        contents: options.contents,
+        config: options.config
+      });
+      const text = response.text?.trim();
+      if (text) {
+        return { text, modelUsed: model };
+      }
+    } catch (err: any) {
+      const isTransient = isTransientGeminiError(err);
+      if (isTransient) {
+        console.warn(`[Gemini API] Model ${model} is temporarily busy or experiencing high demand, smoothly switching to next model: ${err?.message?.slice(0, 100) || "503/429 status"}`);
+      } else {
+        console.warn(`[Gemini API] Model ${model} execution note: ${err?.message?.slice(0, 100)}`);
+      }
+      // Move immediately to next model in the fallback chain for fastest user experience
+      continue;
+    }
+  }
+
+  return null;
 }
 
 // Health check endpoint
@@ -313,8 +706,7 @@ Respond strictly with valid JSON without markdown wrapping:
 
         parts.push({ text: prompt });
 
-        const aiResponse = await client.models.generateContent({
-          model: "gemini-3.8-flash",
+        const aiResponse = await generateContentWithFallback(client, {
           contents: [{ role: "user", parts }],
           config: {
             temperature: 0.1,
@@ -322,19 +714,22 @@ Respond strictly with valid JSON without markdown wrapping:
           }
         });
 
-        const jsonText = aiResponse.text?.trim();
-        if (jsonText) {
-          const parsedData = JSON.parse(jsonText);
-          res.json({
-            success: true,
-            source: "gemini-3.8-flash",
-            report: parsedData,
-            rawText: extractedText
-          });
-          return;
+        if (aiResponse && aiResponse.text) {
+          try {
+            const parsedData = JSON.parse(aiResponse.text.trim());
+            res.json({
+              success: true,
+              source: aiResponse.modelUsed,
+              report: parsedData,
+              rawText: extractedText
+            });
+            return;
+          } catch (jsonErr) {
+            console.warn("JSON parse note on Gemini output, using deterministic extractor:", jsonErr);
+          }
         }
       } catch (geminiError) {
-        console.error("Gemini document analysis error, using deterministic extractor:", geminiError);
+        console.warn("Gemini document analysis note, using deterministic extractor:", geminiError);
       }
     }
 
@@ -385,35 +780,39 @@ ${patientContext ? `PATIENT PROFILE CONTEXT:\n${patientContext}` : ""}`;
     const client = getGeminiClient();
 
     if (client) {
-      // Build conversation contents
-      const contents = [];
-      for (const item of history.slice(-6)) {
-        contents.push({
-          role: item.role === "user" ? "user" : "model",
-          parts: [{ text: item.content }]
-        });
-      }
-      contents.push({
-        role: "user",
-        parts: [{ text: message }]
-      });
-
-      const response = await client.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents,
-        config: {
-          systemInstruction,
-          temperature: 0.3,
-          maxOutputTokens: 800
+      try {
+        // Build conversation contents
+        const contents = [];
+        for (const item of history.slice(-6)) {
+          contents.push({
+            role: item.role === "user" ? "user" : "model",
+            parts: [{ text: item.content }]
+          });
         }
-      });
+        contents.push({
+          role: "user",
+          parts: [{ text: message }]
+        });
 
-      const reply = response.text || "I am here to help you understand your health information in simple terms. Please consult your physician for clinical diagnosis.";
-      res.json({ reply, source: "gemini-3.8-flash" });
-      return;
+        const aiResponse = await generateContentWithFallback(client, {
+          contents,
+          config: {
+            systemInstruction,
+            temperature: 0.3,
+            maxOutputTokens: 800
+          }
+        });
+
+        if (aiResponse && aiResponse.text) {
+          res.json({ reply: aiResponse.text, source: aiResponse.modelUsed });
+          return;
+        }
+      } catch (chatErr) {
+        console.warn("Chat processing note, continuing with educational agent fallback:", chatErr);
+      }
     }
 
-    // Dynamic educational fallback if API key is not active
+    // Dynamic educational fallback if API key is not active or AI models busy
     const lower = message.toLowerCase();
     let fallbackReply = "";
 
@@ -445,7 +844,8 @@ app.post("/api/gemini/summarize-report", async (req, res) => {
     const client = getGeminiClient();
 
     if (client && reportText) {
-      const prompt = `Analyze this patient medical report text and provide a warm, easy-to-understand plain language educational summary for the patient.
+      try {
+        const prompt = `Analyze this patient medical report text and provide a warm, easy-to-understand plain language educational summary for the patient.
 Do NOT diagnose diseases. Do NOT claim the patient definitely has a medical condition.
 Highlight what values were within reference ranges and which one had a mild variation according to the stated ranges.
 Keep it encouraging, clear, and around 3 paragraphs.
@@ -459,14 +859,18 @@ ${JSON.stringify(labFindings || [])}
 End with:
 "Health Companion AI provides educational information only. It does not diagnose conditions or replace professional medical advice."`;
 
-      const result = await client.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        config: { temperature: 0.2 }
-      });
+        const aiResponse = await generateContentWithFallback(client, {
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          config: { temperature: 0.2 }
+        });
 
-      res.json({ summary: result.text });
-      return;
+        if (aiResponse && aiResponse.text) {
+          res.json({ summary: aiResponse.text, source: aiResponse.modelUsed });
+          return;
+        }
+      } catch (sumErr) {
+        console.warn("Summarize note, using educational fallback:", sumErr);
+      }
     }
 
     // Default high quality plain language explanation

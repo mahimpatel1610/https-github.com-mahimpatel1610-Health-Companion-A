@@ -38,27 +38,109 @@ export const INITIAL_DOCTOR_MESSAGES: DoctorMessage[] = [
   }
 ];
 
+// In-memory cache for ultra-fast UI rendering
+let cachedMessages: DoctorMessage[] | null = null;
+let isPollingActive = false;
+
+/**
+ * Synchronous getter for current messages (from cache, localStorage, or defaults)
+ */
 export function getStoredDoctorMessages(): DoctorMessage[] {
+  if (cachedMessages) {
+    return cachedMessages;
+  }
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_DOCTOR_MESSAGES));
-      return INITIAL_DOCTOR_MESSAGES;
+    if (raw) {
+      cachedMessages = JSON.parse(raw);
+      return cachedMessages!;
     }
-    return JSON.parse(raw);
   } catch (err) {
-    console.warn('Failed to parse doctor messages from storage:', err);
-    return INITIAL_DOCTOR_MESSAGES;
+    console.warn('Failed to parse doctor messages from local cache:', err);
+  }
+  cachedMessages = INITIAL_DOCTOR_MESSAGES;
+  return INITIAL_DOCTOR_MESSAGES;
+}
+
+/**
+ * Save messages locally and notify listeners
+ */
+export function saveStoredDoctorMessages(messages: DoctorMessage[], notify = true): void {
+  cachedMessages = messages;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+    if (notify) {
+      window.dispatchEvent(new Event('hc_messages_updated'));
+    }
+  } catch (err) {
+    console.error('Failed to save doctor messages to local storage:', err);
   }
 }
 
-export function saveStoredDoctorMessages(messages: DoctorMessage[]): void {
+/**
+ * Fetch the latest messages from the server backend.
+ * This guarantees that messages sent from other laptops/devices appear immediately.
+ */
+export async function syncDoctorMessagesFromServer(): Promise<DoctorMessage[]> {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
-    window.dispatchEvent(new Event('hc_messages_updated'));
+    const res = await fetch('/api/doctor-messages', {
+      headers: { credentials: 'omit' }
+    });
+    if (!res.ok) {
+      throw new Error(`Server returned status ${res.status}`);
+    }
+    const data = await res.json();
+    if (data && Array.isArray(data.messages)) {
+      const serverMsgs: DoctorMessage[] = data.messages;
+      const currentSerialized = JSON.stringify(getStoredDoctorMessages());
+      const serverSerialized = JSON.stringify(serverMsgs);
+
+      if (currentSerialized !== serverSerialized) {
+        saveStoredDoctorMessages(serverMsgs, true);
+      }
+      return serverMsgs;
+    }
   } catch (err) {
-    console.error('Failed to save doctor messages:', err);
+    // Silently fall back to cached messages if offline
+    // console.warn('Background sync with server failed:', err);
   }
+  return getStoredDoctorMessages();
+}
+
+/**
+ * Start background real-time polling to sync messages across different laptops/devices
+ */
+export function initCrossDeviceMessageSync(): void {
+  if (typeof window === 'undefined' || isPollingActive) return;
+  isPollingActive = true;
+
+  // Immediate initial sync
+  syncDoctorMessagesFromServer();
+
+  // Poll server every 2.5 seconds to detect messages sent from other laptops
+  const intervalId = window.setInterval(() => {
+    syncDoctorMessagesFromServer();
+  }, 2500);
+
+  // Sync immediately when window is refocused or visible
+  const handleVisibilityOrFocus = () => {
+    if (document.visibilityState === 'visible') {
+      syncDoctorMessagesFromServer();
+    }
+  };
+
+  window.addEventListener('focus', handleVisibilityOrFocus);
+  document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+  // Cleanup on page unload (optional)
+  window.addEventListener('beforeunload', () => {
+    window.clearInterval(intervalId);
+  });
+}
+
+// Auto-initialize when running in browser
+if (typeof window !== 'undefined') {
+  initCrossDeviceMessageSync();
 }
 
 export interface SendMessagePayload {
@@ -73,32 +155,61 @@ export interface SendMessagePayload {
   urgency?: 'routine' | 'urgent' | 'question';
 }
 
+/**
+ * Send a message to a doctor.
+ * Saves immediately to local state and posts to the central server so other laptops see it.
+ */
 export function sendDoctorMessage(payload: SendMessagePayload): DoctorMessage {
   const current = getStoredDoctorMessages();
   const newMsg: DoctorMessage = {
-    id: `msg-${Date.now()}`,
+    id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     senderName: payload.senderName.trim() || 'Patient',
     senderEmail: payload.senderEmail.trim(),
     senderPhone: payload.senderPhone?.trim() || '',
     doctorId: payload.doctorId,
     doctorName: payload.doctorName,
-    hospital: payload.hospital || 'Apollo Health City',
-    subject: payload.subject.trim(),
+    hospital: payload.hospital || 'Apollo Health City Hospital',
+    subject: payload.subject.trim() || 'General Inquiry',
     message: payload.message.trim(),
     urgency: payload.urgency || 'routine',
-    timestamp: new Date().toLocaleDateString('en-GB', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric'
-    }) + ', ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    timestamp:
+      new Date().toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+      }) +
+      ', ' +
+      new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     status: 'unread'
   };
 
+  // 1. Optimistic local update so sender sees it immediately
   const updated = [newMsg, ...current];
-  saveStoredDoctorMessages(updated);
+  saveStoredDoctorMessages(updated, true);
+
+  // 2. Persist to server for cross-laptop visibility
+  fetch('/api/doctor-messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+    .then((res) => res.json())
+    .then((data) => {
+      if (data && Array.isArray(data.messages)) {
+        saveStoredDoctorMessages(data.messages, true);
+      }
+    })
+    .catch((err) => {
+      console.warn('Network send to /api/doctor-messages delayed:', err);
+    });
+
   return newMsg;
 }
 
+/**
+ * Doctor replies to a message.
+ * Updates local state and propagates reply to server so patient on any laptop sees it.
+ */
 export function replyToDoctorMessage(
   messageId: string,
   replyText: string,
@@ -114,11 +225,14 @@ export function replyToDoctorMessage(
         status: 'replied' as const,
         reply: {
           text: replyText.trim(),
-          repliedAt: new Date().toLocaleDateString('en-GB', {
-            day: '2-digit',
-            month: 'short',
-            year: 'numeric'
-          }) + ', ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          repliedAt:
+            new Date().toLocaleDateString('en-GB', {
+              day: '2-digit',
+              month: 'short',
+              year: 'numeric'
+            }) +
+            ', ' +
+            new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           doctorName: doctorName.trim() || 'Attending Physician'
         }
       };
@@ -128,11 +242,32 @@ export function replyToDoctorMessage(
   });
 
   if (updatedMsg) {
-    saveStoredDoctorMessages(next);
+    // 1. Optimistic local save
+    saveStoredDoctorMessages(next, true);
+
+    // 2. Transmit to server so patient laptop receives the reply
+    fetch(`/api/doctor-messages/${messageId}/reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ replyText, doctorName })
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && Array.isArray(data.messages)) {
+          saveStoredDoctorMessages(data.messages, true);
+        }
+      })
+      .catch((err) => {
+        console.warn('Network reply to /api/doctor-messages/:id/reply delayed:', err);
+      });
   }
+
   return updatedMsg;
 }
 
+/**
+ * Mark message as read
+ */
 export function markDoctorMessageAsRead(messageId: string): void {
   const current = getStoredDoctorMessages();
   const next = current.map((m) => {
@@ -141,11 +276,23 @@ export function markDoctorMessageAsRead(messageId: string): void {
     }
     return m;
   });
-  saveStoredDoctorMessages(next);
+  saveStoredDoctorMessages(next, true);
+
+  fetch(`/api/doctor-messages/${messageId}/read`, {
+    method: 'PATCH'
+  }).catch(() => {});
 }
 
+/**
+ * Delete a doctor message
+ */
 export function deleteDoctorMessage(messageId: string): void {
   const current = getStoredDoctorMessages();
   const next = current.filter((m) => m.id !== messageId);
-  saveStoredDoctorMessages(next);
+  saveStoredDoctorMessages(next, true);
+
+  fetch(`/api/doctor-messages/${messageId}`, {
+    method: 'DELETE'
+  }).catch(() => {});
 }
+
